@@ -1,8 +1,12 @@
 const express = require('express');
+const cors = require('cors');
 const bodyParser = require('body-parser');
 const { HttpProxy, SocksProxy, ProxyChecker } = require('free-proxy-checker');
 
 const app = express();
+
+// ✅ تفعيل الـ CORS
+app.use(cors());
 app.use(bodyParser.json());
 
 app.post('/check', async (req, res) => {
@@ -23,9 +27,11 @@ app.post('/check', async (req, res) => {
   res.json({ up });
 });
 
+// ✅ صفحة رئيسية للفحص
 app.get("/", (req, res) => {
   res.send("Proxy Checker Server is running.");
 });
 
+// ✅ تشغيل الخادم على المنفذ الصحيح
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
