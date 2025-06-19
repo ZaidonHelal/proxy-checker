@@ -75,23 +75,30 @@ app.post('/speed-test', async (req, res) => {
 
   try {
     const agent = new ProxyAgent(proxy);
+    const start = Date.now();
 
-    const result = await speedTest({
-      acceptLicense: true,
-      acceptGdpr: true,
-      httpsAgent: agent,
+    const response = await axios.get('https://speed.hetzner.de/100MB.bin', {
+      responseType: 'stream',
       httpAgent: agent,
-      timeout: 15000
+      httpsAgent: agent,
+      timeout: 20000,
     });
 
-    res.json({
-      success: true,
-      downloadMbps: result.download.bandwidth / 125000,
-      uploadMbps: result.upload.bandwidth / 125000,
-      ping: result.ping.latency,
-      isp: result.isp,
-      server: result.server.name
+    let downloaded = 0;
+    response.data.on('data', (chunk) => {
+      downloaded += chunk.length;
     });
+
+    response.data.on('end', () => {
+      const duration = (Date.now() - start) / 1000;
+      const speedMbps = (downloaded * 8) / (duration * 1024 * 1024);
+      res.json({ success: true, speedMbps: speedMbps.toFixed(2) });
+    });
+
+    response.data.on('error', (err) => {
+      res.json({ success: false, message: err.message });
+    });
+
   } catch (error) {
     res.json({ success: false, message: error.message });
   }
