@@ -26,38 +26,41 @@ app.post('/check-proxy', async (req, res) => {
       timeout: 15000 
     };
 
-    // ** SOLUTION: The target URL is changed to a more detailed API **
-    // The request will be sent *through the proxy* to this URL.
-    // The API will then return details about the proxy's IP address.
+    // The target URL for checking the IP details
     const targetUrl = 'http://ip-api.com/json';
 
+    // ✅ Your proposed solution implemented here:
     if (proxyUrl.protocol === 'socks4:' || proxyUrl.protocol === 'socks5:') {
-      // For SOCKS proxies, the target must be HTTP, not HTTPS
-      axiosConfig.httpsAgent = new SocksProxyAgent(proxy);
-      axiosConfig.proxy = false; 
+      const socksAgent = new SocksProxyAgent(proxy);
+      // Using httpAgent for http:// targets, as you correctly pointed out.
+      axiosConfig.httpAgent = socksAgent; 
+      // Also setting httpsAgent for completeness, in case the target was HTTPS.
+      axiosConfig.httpsAgent = socksAgent;
+      axiosConfig.proxy = false; // Disable default proxy handling
     } else if (proxyUrl.protocol === 'http:' || proxyUrl.protocol === 'https:') {
-      axiosConfig.httpsAgent = new HttpsProxyAgent(proxy);
-      axiosConfig.proxy = false; 
+      const httpAgent = new HttpsProxyAgent(proxy);
+      // For HTTP/S proxies, HttpsProxyAgent works for both http and https targets
+      axiosConfig.httpAgent = httpAgent;
+      axiosConfig.httpsAgent = httpAgent;
+      axiosConfig.proxy = false;
     } else {
       return res.status(400).json({ status: 'not working', error: 'Unsupported proxy protocol' });
     }
 
     const response = await axios.get(targetUrl, axiosConfig);
 
-    // If the API request fails internally, it reports a 'fail' status
     if (response.data.status === 'fail') {
       throw new Error(`IP-API failed to get info: ${response.data.message}`);
     }
 
-    // ** SOLUTION: Map the new, more detailed fields correctly **
     res.json({
       proxy,
       status: 'working',
-      ip: response.data.query, // The IP address checked
+      ip: response.data.query,
       country: response.data.country,
-      isp: response.data.isp,     // Correct ISP name
-      city: response.data.city,   // City information
-      region: response.data.regionName // Region/State information
+      isp: response.data.isp,
+      city: response.data.city,
+      region: response.data.regionName
     });
 
   } catch (error) {
