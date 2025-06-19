@@ -2,7 +2,6 @@ const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
 const UserAgent = require('user-agents');
-// NEW: Import the necessary proxy agents for SOCKS and HTTPS proxies
 const { SocksProxyAgent } = require('socks-proxy-agent');
 const { HttpsProxyAgent } = require('https-proxy-agent');
 
@@ -12,7 +11,6 @@ app.use(cors());
 app.use(express.json());
 
 app.post('/check-proxy', async (req, res) => {
-  // The 'proxy' variable is the full URL string, e.g., "socks5://user:pass@host:port"
   const { proxy } = req.body;
 
   if (!proxy) {
@@ -23,39 +21,46 @@ app.post('/check-proxy', async (req, res) => {
     const userAgent = new UserAgent().toString();
     const proxyUrl = new URL(proxy);
 
-    // Main configuration for our Axios request
     const axiosConfig = {
       headers: { 'User-Agent': userAgent },
-      timeout: 15000 // Increased timeout for potentially slow proxies
+      timeout: 15000 
     };
 
-    // NEW: Conditionally set the correct agent based on the proxy protocol.
-    // For requests to an 'https' URL like 'https://api.myip.com', we must use an httpsAgent.
-    if (proxyUrl.protocol === 'socks5:') {
+    // ** SOLUTION: The target URL is changed to a more detailed API **
+    // The request will be sent *through the proxy* to this URL.
+    // The API will then return details about the proxy's IP address.
+    const targetUrl = 'http://ip-api.com/json';
+
+    if (proxyUrl.protocol === 'socks4:' || proxyUrl.protocol === 'socks5:') {
+      // For SOCKS proxies, the target must be HTTP, not HTTPS
       axiosConfig.httpsAgent = new SocksProxyAgent(proxy);
-      axiosConfig.proxy = false; // Important: Disable Axios's default proxy handling when using a specific agent
+      axiosConfig.proxy = false; 
     } else if (proxyUrl.protocol === 'http:' || proxyUrl.protocol === 'https:') {
       axiosConfig.httpsAgent = new HttpsProxyAgent(proxy);
-      axiosConfig.proxy = false; // Also important for HTTPS proxies to ensure the agent is used
+      axiosConfig.proxy = false; 
     } else {
-      // Handle unsupported protocols
       return res.status(400).json({ status: 'not working', error: 'Unsupported proxy protocol' });
     }
 
-    // Make the request to the target URL using the configured agent
-    const response = await axios.get('https://api.myip.com', axiosConfig);
+    const response = await axios.get(targetUrl, axiosConfig);
 
-    // If the request is successful, return the proxy status and data
+    // If the API request fails internally, it reports a 'fail' status
+    if (response.data.status === 'fail') {
+      throw new Error(`IP-API failed to get info: ${response.data.message}`);
+    }
+
+    // ** SOLUTION: Map the new, more detailed fields correctly **
     res.json({
       proxy,
       status: 'working',
-      ip: response.data.ip,
+      ip: response.data.query, // The IP address checked
       country: response.data.country,
-      isp: response.data.cc // 'cc' is the country code, which you are using as ISP
+      isp: response.data.isp,     // Correct ISP name
+      city: response.data.city,   // City information
+      region: response.data.regionName // Region/State information
     });
 
   } catch (error) {
-    // Provide more specific and user-friendly error messages
     let errorMessage = error.message;
     if (error.code === 'ECONNRESET' || error.code === 'ECONNABORTED' || error.message.toLowerCase().includes('timeout')) {
         errorMessage = 'Proxy connection timed out.';
@@ -65,7 +70,6 @@ app.post('/check-proxy', async (req, res) => {
         errorMessage = `Proxy returned status: ${error.response.status}`;
     }
     
-    // Return a 'not working' status with the specific error
     res.json({
       proxy,
       status: 'not working',
@@ -74,7 +78,6 @@ app.post('/check-proxy', async (req, res) => {
   }
 });
 
-// The old parseProxy function is no longer needed as the agents handle the URL string directly.
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
