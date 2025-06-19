@@ -1,5 +1,5 @@
 const express = require('express');
-const cors = require('cors');
+const cors = require('cors'); // Use the cors middleware
 const axios = require('axios');
 const UserAgent = require('user-agents');
 const { SocksProxyAgent } = require('socks-proxy-agent');
@@ -7,60 +7,80 @@ const { HttpsProxyAgent } = require('https-proxy-agent');
 
 const app = express();
 
-app.use(cors());
+// ✅ Crucial Step: Enable CORS for all requests.
+// This will add the necessary headers (like 'Access-Control-Allow-Origin: *')
+// to allow your front-end to make calls to this server.
+app.use(cors()); 
+
 app.use(express.json());
 
+// This endpoint will be called by your front-end.
 app.post('/check-proxy', async (req, res) => {
-  const { proxy } = req.body;
+  // Your front-end will send the proxy details in the request body.
+  const proxyDetails = req.body; 
 
-  if (!proxy) {
-    return res.status(400).json({ error: 'Proxy is required' });
+  if (!proxyDetails || !proxyDetails.type || !proxyDetails.ip || !proxyDetails.port) {
+    return res.status(400).json({ status: 'fail', error: 'Incomplete proxy details provided' });
   }
 
   try {
     const userAgent = new UserAgent().toString();
-    const proxyUrl = new URL(proxy);
+    
+    // Construct the full proxy URL string from the details sent by the front-end
+    let authPart = '';
+    if (proxyDetails.username) {
+        authPart = encodeURIComponent(proxyDetails.username);
+        if (proxyDetails.password) {
+            authPart += `:${encodeURIComponent(proxyDetails.password)}`;
+        }
+        authPart += '@';
+    }
+    const proxyUrlString = `${proxyDetails.type}://${authPart}${proxyDetails.ip}:${proxyDetails.port}`;
+    const proxyUrl = new URL(proxyUrlString);
 
     const axiosConfig = {
       headers: { 'User-Agent': userAgent },
       timeout: 15000 
     };
 
-    // The target URL for checking the IP details
+    // The target URL for checking the IP details.
     const targetUrl = 'http://ip-api.com/json';
 
-    // ✅ Your proposed solution implemented here:
+    // Set the correct agent based on the proxy protocol.
     if (proxyUrl.protocol === 'socks4:' || proxyUrl.protocol === 'socks5:') {
-      const socksAgent = new SocksProxyAgent(proxy);
-      // Using httpAgent for http:// targets, as you correctly pointed out.
+      const socksAgent = new SocksProxyAgent(proxyUrlString);
       axiosConfig.httpAgent = socksAgent; 
-      // Also setting httpsAgent for completeness, in case the target was HTTPS.
       axiosConfig.httpsAgent = socksAgent;
-      axiosConfig.proxy = false; // Disable default proxy handling
+      axiosConfig.proxy = false; 
     } else if (proxyUrl.protocol === 'http:' || proxyUrl.protocol === 'https:') {
-      const httpAgent = new HttpsProxyAgent(proxy);
-      // For HTTP/S proxies, HttpsProxyAgent works for both http and https targets
+      const httpAgent = new HttpsProxyAgent(proxyUrlString);
       axiosConfig.httpAgent = httpAgent;
       axiosConfig.httpsAgent = httpAgent;
       axiosConfig.proxy = false;
     } else {
-      return res.status(400).json({ status: 'not working', error: 'Unsupported proxy protocol' });
+      return res.status(400).json({ status: 'fail', error: 'Unsupported proxy protocol' });
     }
 
+    // This server makes the request to the IP API through the user's proxy.
     const response = await axios.get(targetUrl, axiosConfig);
 
     if (response.data.status === 'fail') {
-      throw new Error(`IP-API failed to get info: ${response.data.message}`);
+      throw new Error(`IP-API check failed: ${response.data.message}`);
     }
-
+    
+    // Send the successful, real proxy data back to your front-end.
     res.json({
-      proxy,
-      status: 'working',
-      ip: response.data.query,
-      country: response.data.country,
-      isp: response.data.isp,
-      city: response.data.city,
-      region: response.data.regionName
+      status: 'success',
+      isWorking: true,
+      data: {
+          up: true,
+          internet: true,
+          ip: response.data.query,
+          country: response.data.country,
+          isp: response.data.isp,
+          city: response.data.city,
+          regionName: response.data.regionName
+      }
     });
 
   } catch (error) {
@@ -69,14 +89,15 @@ app.post('/check-proxy', async (req, res) => {
         errorMessage = 'Proxy connection timed out.';
     } else if (error.code === 'ECONNREFUSED') {
         errorMessage = 'Proxy connection refused.';
-    } else if (error.response) {
-        errorMessage = `Proxy returned status: ${error.response.status}`;
     }
     
-    res.json({
-      proxy,
-      status: 'not working',
-      error: errorMessage
+    res.status(500).json({
+      status: 'fail',
+      isWorking: false,
+      data: {
+        up: false,
+        reason: errorMessage
+      }
     });
   }
 });
