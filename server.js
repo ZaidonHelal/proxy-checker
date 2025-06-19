@@ -1,72 +1,92 @@
-const express = require('express');
-const bodyParser = require('body-parser');
-const cors = require('cors');
-const { HttpProxy, SocksProxy, ProxyChecker } = require('free-proxy-checker');
-const HttpsProxyAgent = require('https-proxy-agent');
-const createSocksProxyAgent = require('socks-proxy-agent');
-const axios = require('axios');
-const speedTest = require('speedtest-net');
+import express from 'express';
+import bodyParser from 'body-parser';
+import cors from 'cors';
+import { HttpProxy, SocksProxy, ProxyChecker } from 'free-proxy-checker';
+import { SocksProxyAgent } from 'socks-proxy-agent';
+import { HttpProxyAgent } from 'http-proxy-agent';
+import axios from 'axios';
+import speedTest from 'speedtest-net';
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
 app.post('/check', async (req, res) => {
+  const { type, ip, port, username, password } = req.body;
+
+  let proxyUrl;
+  if (username && password) {
+    proxyUrl = `${type}://${username}:${password}@${ip}:${port}`;
+  } else {
+    proxyUrl = `${type}://${ip}:${port}`;
+  }
+
+  // إنشاء الكائن المناسب حسب نوع البروكسي
+  let proxy;
+  const auth = username && password ? { username, password } : null;
+  if (type === 'http') {
+    proxy = new HttpProxy(ip, port, auth);
+  } else if (type === 'socks5') {
+    proxy = new SocksProxy(ip, port, auth, 5);
+  } else {
+    return res.status(400).json({ error: 'Proxy type not supported. Use http or socks5 only.' });
+  }
+
+  const checker = new ProxyChecker([proxy], { timeout: 7000, concurrency: 1 });
+  await checker.checkProxies();
+  const up = checker.getProxiesUp().length === 1;
+
+  if (!up) {
+    return res.json({ up: false, error: "Proxy not responding" });
+  }
+
+  // استخدام البروكسي لاختبار الاتصال الفعلي بالإنترنت
+  let agent;
   try {
-    const { type, ip, port, username, password } = req.body;
-    const auth = username && password ? { username, password } : null;
+    agent =
+      type === 'http'
+        ? new HttpProxyAgent(proxyUrl)
+        : new SocksProxyAgent(proxyUrl);
 
-    let proxy;
-    if (type === 'http') {
-      proxy = new HttpProxy(ip, port, auth);
-    } else if (type === 'socks5') {
-      proxy = new SocksProxy(ip, port, auth, 5);
-    } else {
-      return res.status(400).json({ error: 'Only http and socks5 are supported.' });
-    }
+    const testResponse = await axios.get('https://api.ipify.org?format=json', {
+      httpsAgent: agent,
+      timeout: 8000,
+    });
 
-    const checker = new ProxyChecker([proxy], { timeout: 5000, concurrency: 1 });
-    await checker.checkProxies();
-    const isUp = checker.getProxiesUp().length === 1;
+    const ip = testResponse.data.ip;
 
-    if (!isUp) {
-      return res.json({ up: false, internet: false });
-    }
+    // احضار معلومات الموقع
+    const geo = await axios.get(`https://ipapi.co/${ip}/json/`);
+    const { country_name, region, org } = geo.data;
 
-    const proxyUrl = `${type}://${username && password ? `${username}:${password}@` : ''}${ip}:${port}`;
-    const agent = type === 'http'
-      ? new HttpsProxyAgent(proxyUrl)
-      : createSocksProxyAgent(proxyUrl);
+    // اختبار سرعة التحميل والتنزيل
+    const result = await speedTest({ acceptLicense: true, acceptGdpr: true });
 
-    let testConnection;
-    try {
-      testConnection = await axios.get('http://www.google.com', { httpAgent: agent, timeout: 7000 });
-    } catch {
-      return res.json({ up: true, internet: false });
-    }
-
-    const st = await speedTest({ proxy: proxyUrl, acceptLicense: true, acceptGdpr: true });
-    const geo = await axios.get('https://ipapi.co/json', { httpAgent: agent });
+    const downloadMbps = (result.download.bandwidth * 8) / 1e6;
+    const uploadMbps = (result.upload.bandwidth * 8) / 1e6;
 
     res.json({
       up: true,
       internet: true,
-      download: (st.download.bandwidth / 1024).toFixed(2), // KB/s
-      upload: (st.upload.bandwidth / 1024).toFixed(2),     // KB/s
-      ip: geo.data.ip,
-      isp: geo.data.org,
-      country: geo.data.country_name,
-      region: geo.data.region
+      ip,
+      isp: org,
+      country: country_name,
+      state: region,
+      download: `${downloadMbps.toFixed(2)} Mbps`,
+      upload: `${uploadMbps.toFixed(2)} Mbps`,
     });
 
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Server error occurred.' });
+    res.json({
+      up: true,
+      internet: false,
+      error: "Proxy connects but cannot access internet",
+    });
   }
 });
 
-app.get('/', (req, res) => {
-  res.send('Proxy Checker API is running.');
+app.get("/", (req, res) => {
+  res.send("Proxy Full Checker is running.");
 });
 
 const PORT = process.env.PORT || 10000;
