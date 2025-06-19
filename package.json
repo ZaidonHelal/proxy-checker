@@ -1,7 +1,7 @@
 {
-  "name": "proxy-checker",
+  "name": "proxy-checker-server",
   "version": "1.0.0",
-  "description": "Proxy checker server",
+  "description": "Proxy checker server that acts as a backend for the UI",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
