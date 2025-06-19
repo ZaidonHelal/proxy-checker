@@ -1,93 +1,85 @@
-import express from 'express';
-import bodyParser from 'body-parser';
-import cors from 'cors';
-import { HttpProxy, SocksProxy, ProxyChecker } from 'free-proxy-checker';
-import { SocksProxyAgent } from 'socks-proxy-agent';
-import { HttpProxyAgent } from 'http-proxy-agent';
-import axios from 'axios';
-import speedTest from 'speedtest-net';
+import express from "express";
+import bodyParser from "body-parser";
+import cors from "cors";
+import axios from "axios";
+import { HttpsProxyAgent } from "http-proxy-agent";
+import { SocksProxyAgent } from "socks-proxy-agent";
+import speedTest from "speedtest-net";
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-app.post('/check', async (req, res) => {
+app.post("/check", async (req, res) => {
   const { type, ip, port, username, password } = req.body;
 
-  let proxyUrl;
-  if (username && password) {
-    proxyUrl = `${type}://${username}:${password}@${ip}:${port}`;
-  } else {
-    proxyUrl = `${type}://${ip}:${port}`;
+  if (!["http", "socks5"].includes(type)) {
+    return res.status(400).json({ error: "Invalid proxy type" });
   }
 
-  // إنشاء الكائن المناسب حسب نوع البروكسي
-  let proxy;
-  const auth = username && password ? { username, password } : null;
-  if (type === 'http') {
-    proxy = new HttpProxy(ip, port, auth);
-  } else if (type === 'socks5') {
-    proxy = new SocksProxy(ip, port, auth, 5);
-  } else {
-    return res.status(400).json({ error: 'Proxy type not supported. Use http or socks5 only.' });
-  }
+  const proxyAuth = username && password ? `${username}:${password}@` : "";
+  const proxyUrl = `${type}://${proxyAuth}${ip}:${port}`;
 
-  const checker = new ProxyChecker([proxy], { timeout: 7000, concurrency: 1 });
-  await checker.checkProxies();
-  const up = checker.getProxiesUp().length === 1;
-
-  if (!up) {
-    return res.json({ up: false, error: "Proxy not responding" });
-  }
-
-  // استخدام البروكسي لاختبار الاتصال الفعلي بالإنترنت
   let agent;
   try {
-    agent =
-      type === 'http'
-        ? new HttpProxyAgent(proxyUrl)
-        : new SocksProxyAgent(proxyUrl);
-
-    const testResponse = await axios.get('https://api.ipify.org?format=json', {
-      httpsAgent: agent,
-      timeout: 8000,
-    });
-
-    const ip = testResponse.data.ip;
-
-    // احضار معلومات الموقع
-    const geo = await axios.get(`https://ipapi.co/${ip}/json/`);
-    const { country_name, region, org } = geo.data;
-
-    // اختبار سرعة التحميل والتنزيل
-    const result = await speedTest({ acceptLicense: true, acceptGdpr: true });
-
-    const downloadMbps = (result.download.bandwidth * 8) / 1e6;
-    const uploadMbps = (result.upload.bandwidth * 8) / 1e6;
-
-    res.json({
-      up: true,
-      internet: true,
-      ip,
-      isp: org,
-      country: country_name,
-      state: region,
-      download: `${downloadMbps.toFixed(2)} Mbps`,
-      upload: `${uploadMbps.toFixed(2)} Mbps`,
-    });
-
-  } catch (err) {
-    res.json({
-      up: true,
-      internet: false,
-      error: "Proxy connects but cannot access internet",
-    });
+    agent = type === "http"
+      ? new HttpsProxyAgent(proxyUrl)
+      : new SocksProxyAgent(proxyUrl);
+  } catch (error) {
+    return res.status(500).json({ error: "Failed to create proxy agent" });
   }
+
+  // الخطوة 1: اختبار البروكسي
+  try {
+    await axios.get("http://example.com", {
+      httpAgent: agent,
+      httpsAgent: agent,
+      timeout: 5000
+    });
+  } catch (err) {
+    return res.json({ up: false, reason: "Proxy connection failed" });
+  }
+
+  // الخطوة 2: اختبار الاتصال بالإنترنت
+  let geoData = {};
+  try {
+    const ipRes = await axios.get("https://ipapi.co/json/", {
+      httpAgent: agent,
+      httpsAgent: agent,
+      timeout: 5000
+    });
+    geoData = {
+      ip: ipRes.data.ip,
+      isp: ipRes.data.org,
+      country: ipRes.data.country_name,
+      state: ipRes.data.region
+    };
+  } catch (err) {
+    return res.json({ up: true, internet: false, reason: "No internet access through proxy" });
+  }
+
+  // الخطوة 3: قياس السرعة
+  let speedMbps = null;
+  try {
+    const result = await speedTest({ acceptLicense: true, proxy: proxyUrl });
+    speedMbps = (result.download.bandwidth * 8 / 1e6).toFixed(2); // بالميغابت
+  } catch (err) {
+    speedMbps = "Unknown";
+  }
+
+  res.json({
+    up: true,
+    internet: true,
+    speedMbps,
+    ...geoData
+  });
 });
 
 app.get("/", (req, res) => {
-  res.send("Proxy Full Checker is running.");
+  res.send("Proxy Checker API is running.");
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
